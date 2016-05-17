@@ -1,6 +1,6 @@
 module ParPipsNlp
 
-using SolverInterface
+using StructJuMPSolverInterface
 import MPI
 
 try

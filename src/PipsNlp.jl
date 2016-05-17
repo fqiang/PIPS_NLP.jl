@@ -1,7 +1,7 @@
 
 module PipsNlp
 
-using SolverInterface
+using StructJuMPSolverInterface
 
 export createProblem, solveProblem, freeProblem
 
