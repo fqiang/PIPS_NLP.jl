@@ -215,7 +215,7 @@ function freeProblem(prob::PipsNlpProblem)
     ret = ccall((:FreePipsNlpProblem, :libpipsnlp),
             Void, (Ptr{Void},),
             prob.ref)
-    @show ret
+    # @show ret
     return ret
 end
 

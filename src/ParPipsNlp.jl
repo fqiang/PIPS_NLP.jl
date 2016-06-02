@@ -115,9 +115,31 @@ type PipsNlpProblemStruct
     ref::Ptr{Void}
     model::ModelInterface
     comm::MPI.Comm
+    prof::Bool
+
+    n_iter::Int
+    t_jl_init_x0::Float64
+    t_jl_str_prob_info::Float64
+    t_jl_eval_f::Float64
+    t_jl_eval_g::Float64
+    t_jl_eval_grad_f::Float64
+
+    t_jl_eval_jac_g::Float64
+    t_jl_str_eval_jac_g::Float64
+    t_jl_eval_h::Float64
+    t_jl_str_eval_h::Float64
+    t_jl_write_solution::Float64
+
+    t_jl_str_total::Float64
+    t_jl_eval_total::Float64
     
-    function PipsNlpProblemStruct(comm, model)
-        prob = new(C_NULL, model, comm)
+    function PipsNlpProblemStruct(comm, model, prof)
+        @show prof
+        prob = new(C_NULL, model, comm, prof,-3
+            ,0.0,0.0,0.0,0.0,0.0
+            ,0.0,0.0,0.0,0.0,0.0
+            ,0.0,0.0
+            )
         # Free the internal PipsNlpProblem structure when
         # the Julia IpoptProblem instance goes out of scope
         finalizer(prob, freeProblemStruct)
@@ -154,8 +176,14 @@ function str_init_x0_wrapper(x0_ptr::Ptr{Float64}, cbd::Ptr{CallBackData})
     assert(rowid == colid)
     n0 = prob.model.get_num_cols(colid)
     x0 = pointer_to_array(x0_ptr, n0)
-    prob.model.str_init_x0(colid,x0)
 
+    if prob.prof
+        tic()
+    end
+    prob.model.str_init_x0(colid,x0)
+    if prob.prof
+        prob.t_jl_init_x0 += toq()
+    end
     return Int32(1)
 end
 
@@ -180,7 +208,14 @@ function str_prob_info_wrapper(n_ptr::Ptr{Cint}, col_lb_ptr::Ptr{Float64}, col_u
 		col_ub = pointer_to_array(col_ub_ptr,0)
 		row_lb = pointer_to_array(row_lb_ptr,0)
 		row_ub = pointer_to_array(row_ub_ptr,0)
+        if prob.prof
+            tic()
+        end
 		(n,m) = prob.model.str_prob_info(colid,mode,col_lb,col_ub,row_lb,row_ub)
+        if prob.prof
+            prob.t_jl_str_prob_info += toq()
+        end
+
 		unsafe_store!(n_ptr,convert(Cint,n)::Cint)
 		unsafe_store!(m_ptr,convert(Cint,m)::Cint)
         # @show typeof(colid), typeof(m)
@@ -193,7 +228,14 @@ function str_prob_info_wrapper(n_ptr::Ptr{Cint}, col_lb_ptr::Ptr{Float64}, col_u
 		col_ub = pointer_to_array(col_ub_ptr,n)
 		row_lb = pointer_to_array(row_lb_ptr,m)
 		row_ub = pointer_to_array(row_ub_ptr,m)
+
+        if prob.prof
+            tic()
+        end
 		prob.model.str_prob_info(colid,mode,col_lb,col_ub,row_lb,row_ub)
+        if prob.prof
+            prob.t_jl_str_prob_info += toq()
+        end
 
 		neq = 0
 		nineq = 0
@@ -226,7 +268,14 @@ function str_eval_f_wrapper(x0_ptr::Ptr{Float64}, x1_ptr::Ptr{Float64}, obj_ptr:
     # Calculate the new objective
     x0 = pointer_to_array(x0_ptr, n0)
     x1 = pointer_to_array(x1_ptr, n1)
+
+    if prob.prof
+        tic()
+    end
     new_obj = convert(Float64, prob.model.str_eval_f(colid,x0,x1))::Float64
+    if prob.prof
+        prob.t_jl_eval_f += toq()
+    end
     # Fill out the pointer
     unsafe_store!(obj_ptr, new_obj)
     # Done
@@ -252,7 +301,14 @@ function str_eval_g_wrapper(x0_ptr::Ptr{Float64}, x1_ptr::Ptr{Float64}, eq_g_ptr
     nineq = prob.model.get_num_ineq_cons(rowid)
     new_eq_g = pointer_to_array(eq_g_ptr,neq)
     new_inq_g = pointer_to_array(inq_g_ptr, nineq)
+
+    if prob.prof
+        tic()
+    end
     prob.model.str_eval_g(colid,x0,x1,new_eq_g,new_inq_g)
+    if prob.prof
+        prob.t_jl_eval_g += toq()
+    end
     # Done
     return Int32(1)
 end
@@ -276,7 +332,14 @@ function str_eval_grad_f_wrapper(x0_ptr::Ptr{Float64}, x1_ptr::Ptr{Float64}, gra
     # Calculate the gradient
     grad_len = prob.model.get_num_cols(colid)
     new_grad_f = pointer_to_array(grad_f_ptr, grad_len)
+
+    if prob.prof
+        tic()
+    end
     prob.model.str_eval_grad_f(rowid,colid,x0,x1,new_grad_f)
+    if prob.prof
+        prob.t_jl_eval_grad_f += toq()
+    end
     if prob.model.get_sense() == :Max
         new_grad_f *= -1.0
     end
@@ -317,7 +380,13 @@ function str_eval_jac_g_wrapper(x0_ptr::Ptr{Float64}, x1_ptr::Ptr{Float64},
 		i_values = pointer_to_array(i_values_ptr,0)
 		i_colptr = pointer_to_array(i_col_ptr,0)
 		i_rowidx = pointer_to_array(i_row_ptr,0)
+        if prob.prof
+            tic()
+        end
         (e_nz,i_nz) = prob.model.str_eval_jac_g(rowid,colid,x0,x1,mode,e_rowidx,e_colptr,e_values,i_rowidx,i_colptr,i_values)
+        if prob.prof
+            prob.t_jl_str_eval_jac_g += toq()
+        end
 		unsafe_store!(e_nz_ptr,convert(Cint,e_nz)::Cint)
 		unsafe_store!(i_nz_ptr,convert(Cint,i_nz)::Cint)
 		# @show "structure - ",(e_nz,i_nz)
@@ -333,7 +402,13 @@ function str_eval_jac_g_wrapper(x0_ptr::Ptr{Float64}, x1_ptr::Ptr{Float64},
     	i_colptr = pointer_to_array(i_col_ptr, ncol+1)
         # @show x0
         # @show x1 
+        if prob.prof
+            tic()
+        end
     	prob.model.str_eval_jac_g(rowid,colid,x0,x1,mode,e_rowidx,e_colptr,e_values,i_rowidx,i_colptr,i_values)
+        if prob.prof
+            prob.t_jl_eval_jac_g += toq()
+        end
     end
     # Done
     return Int32(1)
@@ -347,6 +422,7 @@ function str_eval_h_wrapper(x0_ptr::Ptr{Float64}, x1_ptr::Ptr{Float64}, lambda_p
     # @show data
     userdata = data.prob
     prob = unsafe_pointer_to_objref(userdata)::PipsNlpProblemStruct
+    # @show prob.prof
     rowid = data.row_node_id
     colid = data.col_node_id
     
@@ -373,7 +449,13 @@ function str_eval_h_wrapper(x0_ptr::Ptr{Float64}, x1_ptr::Ptr{Float64}, lambda_p
     	values = pointer_to_array(values_ptr,0)
 		colptr = pointer_to_array(col_ptr,0)
 		rowidx = pointer_to_array(row_ptr,0)
+        if prob.prof
+            tic()
+        end
 		nz = prob.model.str_eval_h(rowid,colid,x0,x1,obj_factor,lambda,mode,rowidx,colptr,values)
+        if prob.prof
+            prob.t_jl_str_eval_h += toq()
+        end
 		unsafe_store!(nz_ptr,convert(Cint,nz)::Cint)
 		# @show "structure - ", nz
     else
@@ -382,9 +464,25 @@ function str_eval_h_wrapper(x0_ptr::Ptr{Float64}, x1_ptr::Ptr{Float64}, lambda_p
     	rowidx = pointer_to_array(row_ptr, nz)
     	colptr = pointer_to_array(col_ptr, ncol+1)
     	# @show "value - ", nz
+        if prob.prof
+            tic()
+        end
     	prob.model.str_eval_h(rowid,colid,x0,x1,obj_factor,lambda,mode,rowidx,colptr,values)
+        if prob.prof
+            prob.t_jl_eval_h += toq()
+            # @show prob.t_jl_eval_h
+        end
     end
     # Done
+    if prob.prof
+        if rowid == colid ==0 
+            prob.n_iter += 1
+            if prob.n_iter == 0
+                prob.t_jl_str_total = t_reset(prob)
+            end
+        end
+    end
+    # @show prob.n_iter
     return Int32(1)
 end
 
@@ -404,14 +502,20 @@ function str_write_solution_wrapper(x_ptr::Ptr{Float64}, y_eq_ptr::Ptr{Float64},
     x = pointer_to_array(x_ptr, nx)
     y_eq = pointer_to_array(y_eq_ptr,neq)
     y_ieq = pointer_to_array(y_ieq_ptr,nieq)
+    if prob.prof
+        tic()
+    end
     prob.model.str_write_solution(rowid,x,y_eq,y_ieq)
+    if prob.prof
+        prob.t_jl_write_solution += toq()
+    end
 
     return Int32(1)
 end
 ###########################################################################
 # C function wrappers
 ###########################################################################
-function createProblemStruct(comm::MPI.Comm, model::ModelInterface)
+function createProblemStruct(comm::MPI.Comm, model::ModelInterface, prof::Bool)
 	# println(" createProblemStruct  -- julia")
 	str_init_x0_cb = cfunction(str_init_x0_wrapper, Cint, (Ptr{Float64}, Ptr{CallBackData}) )
     str_prob_info_cb = cfunction(str_prob_info_wrapper, Cint, (Ptr{Cint}, Ptr{Float64}, Ptr{Float64}, Ptr{Cint}, Ptr{Float64}, Ptr{Float64}, Ptr{CallBackData}) )
@@ -426,7 +530,7 @@ function createProblemStruct(comm::MPI.Comm, model::ModelInterface)
     str_write_solution_cb = cfunction(str_write_solution_wrapper, Cint, (Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{CallBackData}))
     
     # println(" callback created ")
-    prob = PipsNlpProblemStruct(comm, model)
+    prob = PipsNlpProblemStruct(comm, model, prof)
     # @show prob
     ret = ccall((:CreatePipsNlpProblemStruct,:libparpipsnlp),Ptr{Void},
             (MPI.Comm, 
@@ -471,6 +575,8 @@ function solveProblemStruct(prob::PipsNlpProblemStruct)
     
     prob.model.set_status(Int(ret))
 
+    prob.t_jl_eval_total = report_total_now(prob)
+    # @show prob
     return prob.model.get_status()
 end
 
@@ -483,6 +589,35 @@ function freeProblemStruct(prob::PipsNlpProblemStruct)
     return ret
 end
 
+function report_total_now(prob::PipsNlpProblemStruct)
+    total = 0.0
+    total += prob.t_jl_init_x0 
+    total += prob.t_jl_str_prob_info 
+    total += prob.t_jl_eval_f 
+    total += prob.t_jl_eval_g 
+    total += prob.t_jl_eval_grad_f 
+    total += prob.t_jl_eval_jac_g 
+    total += prob.t_jl_str_eval_jac_g 
+    total += prob.t_jl_eval_h 
+    total += prob.t_jl_str_eval_h 
+    total += prob.t_jl_write_solution 
+    return total
+end
+
+function t_reset(prob::PipsNlpProblemStruct)
+    total = report_total_now(prob)
+    prob.t_jl_init_x0  = 0.0
+    prob.t_jl_str_prob_info  = 0.0
+    prob.t_jl_eval_f = 0.0
+    prob.t_jl_eval_g = 0.0
+    prob.t_jl_eval_grad_f = 0.0
+    prob.t_jl_eval_jac_g = 0.0
+    prob.t_jl_str_eval_jac_g = 0.0
+    prob.t_jl_eval_h = 0.0
+    prob.t_jl_str_eval_h = 0.0
+    prob.t_jl_write_solution = 0.0
+    return total
+end
 # include("PipsNlpSolverInterface.jl")
 
 end
